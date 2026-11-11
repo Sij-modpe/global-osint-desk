@@ -2,7 +2,15 @@
 # -*- coding: utf-8 -*-
 """经 SMTP 发送情报简报（Agent Mail 不可用时的降级通道）。
 
-凭据**只从环境变量读取**，不落盘、不写入命令行历史、不出现在任何输出里。
+凭据从环境变量读取，也可写入**仓库外**的配置文件（默认 ~/.workbuddy/osint-smtp.env，
+可用 OSINT_ENV_FILE 覆盖）。配置值不打印、不写入命令行历史、不进 git 仓库。
+
+配置文件格式（每行 KEY=VALUE，# 开头为注释）：
+  OSINT_SMTP_HOST=smtp.qq.com
+  OSINT_SMTP_USER=you@qq.com
+  OSINT_SMTP_PASS=授权码
+
+优先级：真实环境变量 > 配置文件。配置文件缺失或某项为空则跳过，不影响其他项。
 
 必需环境变量：
   OSINT_SMTP_HOST     SMTP 服务器，如 smtp.qq.com / smtp.gmail.com / smtp.163.com
@@ -36,8 +44,33 @@ from email.utils import formataddr, formatdate
 from pathlib import Path
 
 
+ENV_FILE = os.environ.get("OSINT_ENV_FILE") or str(Path.home() / ".workbuddy" / "osint-smtp.env")
+
+
 def env(name, default=""):
     return os.environ.get(name, default).strip()
+
+
+def load_env_file(path=None):
+    """从配置文件加载凭据，仅填补尚未设置的环境变量。返回加载条数。"""
+    p = Path(path or ENV_FILE)
+    if not p.exists():
+        return 0
+    loaded = 0
+    try:
+        lines = p.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return 0
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and v and not os.environ.get(k):
+            os.environ[k] = v
+            loaded += 1
+    return loaded
 
 
 def build_message(args, allow_placeholder=False):
@@ -98,6 +131,8 @@ def main():
     if "@" not in args.to[0]:
         raise SystemExit(f"[错误] 收件地址格式可疑：{args.to[0]}。发送前请逐字核对。")
 
+    load_env_file()
+
     try:
         msg, sender = build_message(args, allow_placeholder=args.dry_run)
     except SystemExit:
@@ -113,6 +148,11 @@ def main():
     print(f"正文：{'HTML' if args.html else '纯文本'}，约 {len(msg.as_string()) // 1024} KB")
 
     if args.dry_run:
+        # 凭据自检：只报"有没有"，绝不回显值
+        have = lambda k: "已设" if env(k) or os.environ.get(k) else "**未设**"
+        print(f"凭据：HOST={have('OSINT_SMTP_HOST')}  USER={have('OSINT_SMTP_USER')}  "
+              f"PASS={have('OSINT_SMTP_PASS')}  配置文件={ENV_FILE}"
+              f"{'（存在）' if Path(ENV_FILE).exists() else '（不存在）'}")
         print("[干跑] 未实际发送。核对无误后去掉 --dry-run 重跑。")
         return 0
 
