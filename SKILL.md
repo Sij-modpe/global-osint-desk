@@ -99,9 +99,11 @@ agent_created: true
 
 1. 确认收件地址。委托方未给就问，不猜、不用默认值。
 2. **先验通路，再生成正文**：用 `ToolSearch` 精确检索 `mcp__qq-mail__SendMessage` 与 `mcp__agent-mail__SendMessage`，看哪一个**已注册在本会话**。未注册 ≠ 邮箱未开通——两者都是**会话级授权**，连接器卡片显示 connected 也不代表本会话拿到了 send 权限。验不通就直接走第 8 条，别浪费 token 写 HTML。
-3. **首选 QQ 邮箱**（`mcp__qq-mail__SendMessage`）：日额度 2000 封，发件地址即用户本人主别名，最稳。
+3. **首选 QQ 邮箱**（`mcp__qq-mail__SendMessage`）：日额度 2000 封，最稳。
+   - **发件人身份须显式指定**：多个别名时，省略 `alias_id` 会落到服务端默认的主别名（实测落到了 `@foxmail.com` 而非用户期望的 `@qq.com`）。先 `GetMe` 看别名清单，按需传 `alias_id`；不指定就等于放弃对发件人身份的控制。
    - 正文格式 `body_format: MARKDOWN`（`build_briefing.py` 产出的 HTML 亦可，但 QQ 客户端对 MARKDOWN 渲染更干净）。
    - 附件用 `scripts/attach_payload.py <file...>` 生成 base64 载荷数组，直接填 `attachments`。硬限制：**单件 ≤1 MB、合计 ≤3 MB、最多 3 件**；报告超出时只发简报正文，报告改为本地交付。
+   - 验证送达：`ListMessages` 查 `dir: sent` 与收件箱，核对 `from` / `to` / `has_attachments` 三项；`queued: true` 只是入队，不等于送达。
 4. **次选 Agent Mail**（`mcp__agent-mail__SendMessage`）：附件先 `agent_mail_upload_attachment` 取 `file_id`，放入 **`file_refs`**（`attachments` 要求 base64 全文，必报错）。日额度 50 封，发件域名为 `@agent.qq.com`，收件方看到的不是用户本人地址。
 5. **两段式确认（两家都有）**：不带 `skip_confirmation` 的首次调用只返回 `confirmation_token`，**邮件尚未发出**。用户已授权就传 `skip_confirmation: true`；未授权则先展示 `operation_summary` 请其确认，再带 `confirmation_token` 二次调用。把第一次返回当"已发送"是本技能最常见的假成功。
 6. 发送后核对返回的发件别名与剩余额度，写进交付说明。
@@ -153,7 +155,7 @@ agent_created: true
 7. **信源白名单是用户主权**：用户指定信任的账号/媒体写入 `source-catalog.md` 第五节，评级与适用领域按用户指令，但独立性判定不豁免（白名单账号互引只计一个独立源），A 级仅限用户指定领域。
 8. **本机语言一手源缺口是系统性短板**：阿语/普语/乌语等当地媒体未进采集面时，报告须在缺口栏显式声明"隔了一层英文/中文转述"，不得默认采集面完整。
 9. **发送能力是会话级授权，不是账号级状态**：连接器卡片显示 connected、`list_installed_plugins` 显示已装，都不保证本会话拿得到 `SendMessage`。反例实测：同一台机器上，某会话只曝露 `agent_mail_upload_attachment` / `agent_mail_download_attachment` 两个工具，send 根本不在工具索引里，此时无论怎样重试都发不出。**先验工具是否注册，再谈邮箱是否开通**；把工具缺失误报成"邮箱未开通"会误导用户去重开一个早已开通的邮箱。
-10. **QQ 邮箱（`mcp__qq-mail__SendMessage`）是首选投递通路**：日额度 2000（Agent Mail 仅 50），发件地址即用户本人主别名。代价是附件需 base64 内联且限单件 1 MB / 合计 3 MB / 3 件——用 `scripts/attach_payload.py` 生成载荷，超限则报告留本地、只发正文。
+10. **QQ 邮箱（`mcp__qq-mail__SendMessage`）是首选投递通路**：日额度 2000（Agent Mail 仅 50）。代价是：① 附件需 base64 内联且限单件 1 MB / 合计 3 MB / 3 件——用 `scripts/attach_payload.py` 生成载荷，超限则报告留本地、只发正文；② 多别名下 `alias_id` 省略会落到服务端默认别名，不等于用户期望的发件身份；③ `queued: true` 只表示入队，须用 `ListMessages` 核对 sent 与 inbox 才算送达。
 
 ## 触发自测（修改本技能后跑一遍）
 
