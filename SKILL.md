@@ -98,16 +98,19 @@ agent_created: true
 分发（邮件）流程：
 
 1. 确认收件地址。委托方未给就问，不猜、不用默认值。
-2. 生成 HTML 正文：`python scripts/build_briefing.py <brief.md> -o <brief.html>`，报告全文作为附件。
-3. **先验通路，再写正文以外的东西**：用 `ToolSearch` 精确检索 `mcp__agent-mail__SendMessage`，确认发送工具**已注册在本会话**。未注册 ≠ 邮箱未开通——Agent Mail 的发送工具是**会话级授权**，连接器卡片显示"connected"也不代表本会话拿到了 send 权限。此步失败直接跳第 7 条，不要浪费 token 生成 HTML。
-4. 已注册则发送：`SendMessage`，`body_format: MARKDOWN`（HTML 正文可读性差时优先 MARKDOWN）；附件先 `agent_mail_upload_attachment` 取 `file_id`，再放入 **`file_refs`** 字段（`attachments` 字段要求 base64 全文，必然报错）。
-5. **两段式确认**：不带 `skip_confirmation` 的首次调用只返回 `confirmation_token`，**邮件尚未发出**。用户已授权就直接传 `skip_confirmation: true`；未授权则先问，再带 `confirmation_token` 二次调用。把第一次调用的 token 当成"已发送"是本技能最常见的假成功。
-6. 额度：主别名每日 50 封。发完核对返回的发件地址与剩余额度，写进交付说明。
-7. 发送通路不可用时的降级，按此顺序，**不得谎报已发送**：
-   - (a) 请用户在会话底部「+」菜单启用 Agent Mail 连接器（这是授权问题，不是邮箱开通问题）；
-   - (b) `scripts/send_briefing.py` 走用户自有 SMTP（需 `OSINT_SMTP_HOST/USER/PASS` 三个环境变量，QQ 邮箱用授权码）；变量缺失时该路径必失败，先检查再提；
+2. **先验通路，再生成正文**：用 `ToolSearch` 精确检索 `mcp__qq-mail__SendMessage` 与 `mcp__agent-mail__SendMessage`，看哪一个**已注册在本会话**。未注册 ≠ 邮箱未开通——两者都是**会话级授权**，连接器卡片显示 connected 也不代表本会话拿到了 send 权限。验不通就直接走第 8 条，别浪费 token 写 HTML。
+3. **首选 QQ 邮箱**（`mcp__qq-mail__SendMessage`）：日额度 2000 封，发件地址即用户本人主别名，最稳。
+   - 正文格式 `body_format: MARKDOWN`（`build_briefing.py` 产出的 HTML 亦可，但 QQ 客户端对 MARKDOWN 渲染更干净）。
+   - 附件用 `scripts/attach_payload.py <file...>` 生成 base64 载荷数组，直接填 `attachments`。硬限制：**单件 ≤1 MB、合计 ≤3 MB、最多 3 件**；报告超出时只发简报正文，报告改为本地交付。
+4. **次选 Agent Mail**（`mcp__agent-mail__SendMessage`）：附件先 `agent_mail_upload_attachment` 取 `file_id`，放入 **`file_refs`**（`attachments` 要求 base64 全文，必报错）。日额度 50 封，发件域名为 `@agent.qq.com`，收件方看到的不是用户本人地址。
+5. **两段式确认（两家都有）**：不带 `skip_confirmation` 的首次调用只返回 `confirmation_token`，**邮件尚未发出**。用户已授权就传 `skip_confirmation: true`；未授权则先展示 `operation_summary` 请其确认，再带 `confirmation_token` 二次调用。把第一次返回当"已发送"是本技能最常见的假成功。
+6. 发送后核对返回的发件别名与剩余额度，写进交付说明。
+7. 正文与附件规格见 `references/report-templates.md` 第五节；HTML 正文由 `python scripts/build_briefing.py <brief.md> -o <brief.html>` 生成。
+8. 两路都不通时的降级，按此顺序，**不得谎报已发送**：
+   - (a) 请用户在会话底部「+」菜单启用对应连接器（这是会话授权问题，不是邮箱开通问题）；
+   - (b) `scripts/send_briefing.py` 走用户自有 SMTP（需 `OSINT_SMTP_HOST/USER/PASS` 三个环境变量，QQ 邮箱用授权码而非登录密码）；变量缺失时该路径必失败，先查再提；
    - (c) 本地落盘 HTML + MD，交用户自行转发，并明确告知"未发出"。
-8. 发邮件属对外动作，**必须经用户确认**后执行；除非用户在本次会话中已明确授权"直接发、不必再问"。
+9. 发邮件属对外动作，**必须经用户确认**后执行；除非用户在本次会话中已明确授权"直接发、不必再问"。
 
 ## 定期作业（可选）
 
@@ -150,6 +153,7 @@ agent_created: true
 7. **信源白名单是用户主权**：用户指定信任的账号/媒体写入 `source-catalog.md` 第五节，评级与适用领域按用户指令，但独立性判定不豁免（白名单账号互引只计一个独立源），A 级仅限用户指定领域。
 8. **本机语言一手源缺口是系统性短板**：阿语/普语/乌语等当地媒体未进采集面时，报告须在缺口栏显式声明"隔了一层英文/中文转述"，不得默认采集面完整。
 9. **发送能力是会话级授权，不是账号级状态**：连接器卡片显示 connected、`list_installed_plugins` 显示已装，都不保证本会话拿得到 `SendMessage`。反例实测：同一台机器上，某会话只曝露 `agent_mail_upload_attachment` / `agent_mail_download_attachment` 两个工具，send 根本不在工具索引里，此时无论怎样重试都发不出。**先验工具是否注册，再谈邮箱是否开通**；把工具缺失误报成"邮箱未开通"会误导用户去重开一个早已开通的邮箱。
+10. **QQ 邮箱（`mcp__qq-mail__SendMessage`）是首选投递通路**：日额度 2000（Agent Mail 仅 50），发件地址即用户本人主别名。代价是附件需 base64 内联且限单件 1 MB / 合计 3 MB / 3 件——用 `scripts/attach_payload.py` 生成载荷，超限则报告留本地、只发正文。
 
 ## 触发自测（修改本技能后跑一遍）
 
@@ -179,6 +183,7 @@ agent_created: true
 | `scripts/gdelt_scan.py` | 快速建立多语种事件全景（线索层，非证据层） |
 | `scripts/rss_scan.py` | 批量扫订阅源，关键词过滤与去重 |
 | `scripts/build_briefing.py` | Markdown 简报转邮件 HTML |
-| `scripts/send_briefing.py` | Agent Mail 不可用时，经 SMTP 发送（凭据走环境变量） |
+| `scripts/attach_payload.py` | 走 QQ 邮箱发附件时，生成 base64 载荷（含 1MB/3MB/3 件限值预检） |
+| `scripts/send_briefing.py` | 两家连接器都不可用时，经 SMTP 发送（凭据走环境变量） |
 
 脚本仅为加速器。脚本失败不阻塞流程，退回 WebSearch + WebFetch 手工采集即可，但评级与印证标准不变。
